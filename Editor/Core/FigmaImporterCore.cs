@@ -15,12 +15,12 @@ namespace Figma2Ugui.Core
 
         private void Awake()
         {
-            ApiClient = new FigmaApiClient();
+            Settings = new ProjectSettings();
+            ApiClient = new FigmaApiClient(Settings.accessToken);
             Parser = new FigmaParser();
             Converter = new UguiConverter();
             AssetDownloader = new AssetDownloader();
             PrefabCreator = new PrefabCreator();
-            Settings = new ProjectSettings();
         }
     }
 }
