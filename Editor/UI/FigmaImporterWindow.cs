@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using System;
 using Figma2Ugui.Core;
+using Figma2Ugui.Utils;
 
 namespace Figma2Ugui.UI
 {
@@ -71,15 +72,7 @@ namespace Figma2Ugui.UI
 
         private string ExtractFileKey(string url)
         {
-            var parts = url.Split('/');
-            for (int i = 0; i < parts.Length; i++)
-            {
-                if (parts[i] == "file" && i + 1 < parts.Length)
-                {
-                    return parts[i + 1];
-                }
-            }
-            throw new Exception("Invalid Figma URL");
+            return FigmaUrlParser.ExtractFileKey(url);
         }
     }
 }

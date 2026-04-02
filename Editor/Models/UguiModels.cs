@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 
 namespace Figma2Ugui.Models
@@ -41,7 +42,11 @@ namespace Figma2Ugui.Models
         public float fontSize;
         public string fontFamily;
         public int fontWeight;
-        public string spritePath;
+        public TextAlignmentOptions textAlign = TextAlignmentOptions.Left;
+        public float letterSpacing;
+        public string imageRef;
+        public string imageNodeId; // Figma node ID, used for API export
+        public Sprite sprite;
         public bool isScrollable;
     }
 }

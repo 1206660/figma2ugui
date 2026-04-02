@@ -1,12 +1,28 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using UnityEditor;
 using Figma2Ugui.Models;
 
 namespace Figma2Ugui.Core
 {
     public class UguiConverter
     {
+        private Sprite whiteSprite;
+
+        public UguiConverter()
+        {
+            whiteSprite = CreateWhiteSprite();
+        }
+
+        private Sprite CreateWhiteSprite()
+        {
+            var tex = new Texture2D(1, 1);
+            tex.SetPixel(0, 0, Color.white);
+            tex.Apply();
+            return Sprite.Create(tex, new Rect(0, 0, 1, 1), Vector2.zero);
+        }
+
         public GameObject Convert(UguiNode node, Transform parent = null)
         {
             var go = new GameObject(node.name);
@@ -28,13 +44,20 @@ namespace Figma2Ugui.Core
                     break;
                 case UguiComponentType.Image:
                     var image = go.AddComponent<Image>();
+                    image.sprite = node.componentData.sprite ?? whiteSprite;
                     image.color = node.componentData.color;
+                    if (node.componentData.imageRef != null && node.componentData.sprite != null)
+                    {
+                        image.type = Image.Type.Simple;
+                    }
                     break;
                 case UguiComponentType.Text:
                     var text = go.AddComponent<TextMeshProUGUI>();
                     text.text = node.componentData.text;
                     text.fontSize = node.componentData.fontSize;
                     text.color = node.componentData.color;
+                    text.alignment = node.componentData.textAlign;
+                    text.characterSpacing = node.componentData.letterSpacing;
                     break;
                 case UguiComponentType.ScrollView:
                     AddScrollView(go);
