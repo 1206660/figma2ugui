@@ -1,0 +1,21 @@
+{
+  "name": "com.figma2ugui.core",
+  "version": "0.1.0",
+  "displayName": "Figma to UGUI Importer",
+  "description": "Import Figma designs directly into Unity as UGUI components",
+  "unity": "2021.3",
+  "keywords": [
+    "figma",
+    "ugui",
+    "ui",
+    "importer",
+    "design"
+  ],
+  "author": {
+    "name": "figma2ugui",
+    "url": "https://github.com/yourusername/figma2ugui"
+  },
+  "dependencies": {
+    "com.unity.textmeshpro": "3.0.6"
+  }
+}
