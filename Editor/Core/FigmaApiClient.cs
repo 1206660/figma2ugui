@@ -39,11 +39,6 @@ namespace Figma2Ugui.Core
             throw new Exception($"Failed to fetch file: {request.error}");
         }
 
-        /// <summary>
-        /// 批量导出图片
-        /// nodeIdToRef: nodeId → imageRef 的映射
-        /// 返回: imageRef → Sprite 的映射
-        /// </summary>
         public async Task<Dictionary<string, Sprite>> ExportImagesAsync(
             string fileKey,
             Dictionary<string, string> nodeIdToRef,
@@ -55,126 +50,182 @@ namespace Figma2Ugui.Core
 
             Directory.CreateDirectory(CACHE_DIR);
 
-            AssetDatabase.StartAssetEditing();
-            var allNodeIds = new List<string>(nodeIdToRef.Keys);
-            var total = allNodeIds.Count;
-            var batchSize = 10;
-            var downloaded = 0;
-
-            // imageRef 去重：已下载过的 imageRef 不重复下载
-            var downloadedRefs = new HashSet<string>();
-
-            for (var i = 0; i < allNodeIds.Count; i += batchSize)
+            // Phase 1: 检查本地缓存，收集需要新下载的 nodeId
+            var needDownload = new Dictionary<string, string>(); // nodeId → imageRef
+            foreach (var kvp in nodeIdToRef)
             {
-                var batch = allNodeIds.GetRange(i, Math.Min(batchSize, total - i));
-                var ids = string.Join(",", batch);
-                var endpoint = $"images/{fileKey}?ids={ids}&format=png&scale={scale}";
-                Debug.Log($"[Figma2Ugui] Exporting batch {i / batchSize + 1}/{Mathf.CeilToInt((float)total / batchSize)} ({batch.Count} images)");
-                var request = CreateRequest(endpoint);
-                await SendRequest(request);
+                var nodeId = kvp.Key;    // Key = nodeId
+                var imageRef = kvp.Value;  // Value = imageRef
+                var cachedPath = Path.Combine(CACHE_DIR, $"{imageRef}.png");
 
-                if ((long)request.responseCode == 429)
+                if (File.Exists(cachedPath))
                 {
-                    Debug.LogWarning("[Figma2Ugui] Rate limited, waiting 5s...");
-                    Debug.LogWarning("[Figma2Ugui] Rate limited, waiting 5s...");
-                    await Task.Delay(5000);
-                    i -= batchSize;
-                    continue;
+                    Debug.Log($"[Figma2Ugui] Cache hit: {imageRef.Substring(0, 12)}...");
                 }
-
-                if (request.result != UnityWebRequest.Result.Success)
+                else
                 {
-                    Debug.LogError($"[Figma2Ugui] Failed to export images batch: {request.error}");
-                    continue;
+                    needDownload[nodeId] = imageRef;
                 }
+            }
 
-                var response = JsonConvert.DeserializeObject<ImageExportResponse>(request.downloadHandler.text);
-                if (response?.images == null) continue;
+            var cachedCount = nodeIdToRef.Count - needDownload.Count;
+            if (cachedCount > 0)
+            {
+                Debug.Log($"[Figma2Ugui] {cachedCount}/{nodeIdToRef.Count} images found in local cache.");
+            }
 
-                foreach (var kvp in response.images)
+            if (needDownload.Count > 0)
+            {
+                // Phase 2: 批量从 Figma 下载，写入磁盘
+                Debug.Log($"[Figma2Ugui] Downloading {needDownload.Count} new images from Figma...");
+                var newFiles = new HashSet<string>(); // 写入的新文件路径
+
+                var nodeIds = new List<string>(needDownload.Keys);
+                var batchSize = 10;
+                var done = 0;
+
+                for (var i = 0; i < nodeIds.Count; i += batchSize)
                 {
-                    var nodeId = kvp.Key;
-                    var imageUrl = kvp.Value;
+                    var batch = nodeIds.GetRange(i, Math.Min(batchSize, nodeIds.Count));
+                    var ids = string.Join(",", batch);
+                    var endpoint = $"images/{fileKey}?ids={ids}&format=png&scale={scale}";
+                    Debug.Log($"[Figma2Ugui] Batch {i / batchSize + 1}/{Mathf.CeilToInt((float)nodeIds.Count / batchSize)}: requesting {batch.Count} images");
 
-                    // 找到对应的 imageRef
-                    if (!nodeIdToRef.TryGetValue(nodeId, out var imageRef)) continue;
+                    var request = CreateRequest(endpoint);
+                    await SendRequest(request);
 
-                    // 同一张图已下载过，复用 sprite
-                    if (downloadedRefs.Contains(imageRef)) continue;
+                    if ((long)request.responseCode == 429)
+                    {
+                        Debug.LogWarning("[Figma2Ugui] Rate limited, waiting 5s...");
+                        await Task.Delay(5000);
+                        i -= batchSize;
+                        continue;
+                    }
 
+                    if (request.result != UnityWebRequest.Result.Success)
+                    {
+                        Debug.LogError($"[Figma2Ugui] Batch failed [{request.responseCode}]: {request.error}");
+                        done += batch.Count;
+                        continue;
+                    }
+
+                    ImageExportResponse response;
                     try
                     {
-                        var bytes = await DownloadBytesAsync(imageUrl);
-                        var sprite = CreateSprite(bytes, imageRef);
-                        result[imageRef] = sprite;
-                        downloadedRefs.Add(imageRef);
+                        response = JsonConvert.DeserializeObject<ImageExportResponse>(request.downloadHandler.text);
                     }
                     catch (Exception e)
                     {
-                        Debug.LogError($"[Figma2Ugui] Failed to download image {nodeId}: {e.Message}");
+                        Debug.LogError($"[Figma2Ugui] Batch parse error: {e.Message}");
+                        done += batch.Count;
+                        continue;
                     }
 
-                    downloaded++;
+                    if (response?.images == null)
+                    {
+                        Debug.LogError("[Figma2Ugui] Batch returned null images.");
+                        done += batch.Count;
+                        continue;
+                    }
+
+                    foreach (var imgKvp in response.images)
+                    {
+                        var nodeId = imgKvp.Key;
+                        var imageUrl = imgKvp.Value;
+
+                        if (!needDownload.TryGetValue(nodeId, out var imageRef)) continue;
+
+                        if (string.IsNullOrEmpty(imageUrl))
+                        {
+                            Debug.LogWarning($"[Figma2Ugui] Skip {nodeId}: empty URL from Figma");
+                            done++;
+                            continue;
+                        }
+
+                        try
+                        {
+                            var bytes = await DownloadBytesAsync(imageUrl);
+                            if (bytes == null || bytes.Length == 0)
+                            {
+                                Debug.LogWarning($"[Figma2Ugui] Skip {nodeId} (ref={imageRef.Substring(0, 12)}...): download returned 0 bytes");
+                                done++;
+                                continue;
+                            }
+
+                            var filePath = Path.Combine(CACHE_DIR, $"{imageRef}.png");
+                            File.WriteAllBytes(filePath, bytes);
+                            newFiles.Add(filePath);
+                            Debug.Log($"[Figma2Ugui] Downloaded {nodeId} -> {imageRef.Substring(0, 12)}... ({bytes.Length} bytes)");
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogError($"[Figma2Ugui] Error downloading {nodeId}: {e.Message}");
+                        }
+
+                        done++;
+                    }
+
+                    onProgress?.Invoke(cachedCount + done, nodeIdToRef.Count);
+                    await Task.Delay(200);
                 }
 
-                onProgress?.Invoke(downloaded, total);
-                await Task.Delay(200);
+                Debug.Log($"[Figma2Ugui] All downloads complete. {newFiles.Count} new files written to disk.");
             }
 
-            AssetDatabase.StopAssetEditing();
-            AssetDatabase.Refresh();
-            Debug.Log($"[Figma2Ugui] Asset database refreshed.");
+            // Phase 3: 统一 Refresh + 配置 Sprite + 加载
+            Debug.Log($"[Figma2Ugui] Refreshing asset database...");
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
+            var allImageRefs = new HashSet<string>(nodeIdToRef.Values); // Values = imageRef
+            foreach (var imageRef in allImageRefs)
+            {
+                var filePath = Path.Combine(CACHE_DIR, $"{imageRef}.png");
+
+                var importer = AssetImporter.GetAtPath(filePath) as TextureImporter;
+                if (importer == null)
+                {
+                    Debug.LogWarning($"[Figma2Ugui] Skip {imageRef.Substring(0, 12)}...: no TextureImporter at {filePath}");
+                    continue;
+                }
+
+                // 检查是否已配置为 Sprite
+                if (importer.textureType != TextureImporterType.Sprite)
+                {
+                    importer.textureType = TextureImporterType.Sprite;
+                    importer.spritePixelsPerUnit = 100;
+                    importer.alphaSource = TextureImporterAlphaSource.FromInput;
+                    importer.SaveAndReimport();
+                }
+
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(filePath);
+                if (sprite != null)
+                {
+                    result[imageRef] = sprite;
+                    Debug.Log($"[Figma2Ugui] OK: {imageRef.Substring(0, 12)}... ({sprite.texture.width}x{sprite.texture.height})");
+                }
+                else
+                {
+                    Debug.LogWarning($"[Figma2Ugui] Sprite load failed for {filePath}");
+                }
+            }
+
+            Debug.Log($"[Figma2Ugui] Image import complete: {result.Count}/{nodeIdToRef.Count} sprites loaded.");
             return result;
-        }
-
-        private Sprite CreateSprite(byte[] bytes, string imageRef)
-        {
-            var fileName = $"{imageRef}.png";
-            var filePath = Path.Combine(CACHE_DIR, fileName);
-
-            // 已存在则直接加载
-            if (File.Exists(filePath))
-            {
-                var existing = AssetDatabase.LoadAssetAtPath<Sprite>(filePath);
-                if (existing != null) return existing;
-            }
-
-            File.WriteAllBytes(filePath, bytes);
-
-            // 先让 Unity 识别这个文件
-            AssetDatabase.ImportAsset(filePath, ImportAssetOptions.ForceSynchronousImport);
-
-            // 配置为 Sprite
-            var importer = AssetImporter.GetAtPath(filePath) as TextureImporter;
-            if (importer != null)
-            {
-                importer.textureType = TextureImporterType.Sprite;
-                importer.spritePixelsPerUnit = 100;
-                importer.alphaSource = TextureImporterAlphaSource.FromInput;
-                importer.SaveAndReimport();
-            }
-            else
-            {
-                Debug.LogError($"[Figma2Ugui] Failed to get TextureImporter for {filePath}");
-            }
-
-            var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(filePath);
-            if (sprite == null)
-            {
-                Debug.LogError($"[Figma2Ugui] Failed to load sprite from {filePath}");
-            }
-            else
-            {
-                Debug.Log($"[Figma2Ugui] Created sprite: {sprite.name} ({sprite.texture.width}x{sprite.texture.height})");
-            }
-            return sprite;
         }
 
         private async Task<byte[]> DownloadBytesAsync(string url)
         {
             var request = UnityWebRequest.Get(url);
             await SendRequest(request);
+
+            if (request.result != UnityWebRequest.Result.Success
+                || request.downloadHandler.data == null
+                || request.downloadHandler.data.Length == 0)
+            {
+                Debug.LogWarning($"[Figma2Ugui] Download failed: {request.error}, url={url}");
+                return null;
+            }
+
             return request.downloadHandler.data;
         }
 

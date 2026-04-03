@@ -90,13 +90,14 @@ namespace Figma2Ugui.Core
             else
             {
                 var parentBounds = parent.absoluteBoundingBox;
+                // Figma Y 向下增大, Unity Y 向上增大, pivot (0,1) 从左上角定位
                 float x = bounds.x - parentBounds.x;
-                float y = parentBounds.height - (bounds.y - parentBounds.y) - bounds.height;
+                float y = -(bounds.y - parentBounds.y);
 
                 data.anchorMin = Vector2.zero;
                 data.anchorMax = Vector2.zero;
                 data.pivot = new Vector2(0, 1);
-                data.anchoredPosition = new Vector2(x, -y);
+                data.anchoredPosition = new Vector2(x, y);
                 data.sizeDelta = new Vector2(bounds.width, bounds.height);
             }
 
